@@ -11,8 +11,8 @@ Maybe install from source code is Ok, while the way you include the mpi.h file w
 ### Runing on multi-machine
 If you want to run the code on multi machines, following the below steps.
 1. Set up passwardless ssh login on all the machines (using ssh public key)
-2. Build up a share file system/directory to all the machines. For example, nfs and cephfs. Then put all the executable files and the data files which the program needs when it runs. Also put the configure file here.
-3. Write the configure file to specify which machines to run your code, and how many process on each machines. Here is an example: 
+2. Build up a shared file system/directory to all the machines. For example, nfs and cephfs. Then put all the executable files and the data files which the program needs when it runs to this shared file system. Also put the configure file here.
+3. Write the configure file to specify which machines to run your code, and how many process on each machine. Here is an example: 
 ```
 host1:4
 host2:4
