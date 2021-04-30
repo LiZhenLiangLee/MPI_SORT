@@ -3,15 +3,15 @@
 #include <string.h>
 #include <mpich/mpi.h>
 #include <time.h>
+#include <sys/time.h>
 
 #define fourG (1ull << 32)
 #define oneG (1ull << 30)
 #define hhG (1ull << 28)
 
-const char *save_path_256M = "/mnt/cephfs/home/lizhenliang/mpi_random_files/ran256m";
-const char *save_path_1G = "/mnt/cephfs/home/lizhenliang/mpi_random_files/ran1g";
-const char *save_path_4G = "/mnt/cephfs/home/lizhenliang/mpi_random_files/ran4g";
-
+char *save_path_256M = "/mnt/cephfs/home/lizhenliang/mpi_random_files/ran256m";
+char *save_path_1G = "/mnt/cephfs/home/lizhenliang/mpi_random_files/ran1g";
+char *save_path_4G = "/mnt/cephfs/home/lizhenliang/mpi_random_files/ran4g";
 
 int cmpfunc(const void *a, const void *b)
 {
@@ -35,55 +35,23 @@ void rand_gen(float *a, int arr_len, int seed)
     }
 }
 
-void display(float *a, int length, int rank)
-{
-    printf("Rank %d ", rank);
-    for (int i = 0; i < length; i++)
-    {
-        printf("%f  ", a[i]);
-    }
-    printf("\n");
-}
-
-void display_int(int *a, int length, int rank)
-{
-    printf("Rank %d ", rank);
-    for (int i = 0; i < length; i++)
-    {
-        printf("%d  ", a[i]);
-    }
-    printf("\n");
-}
-
-void display_worank(float *a, int length)
-{
-    for (int i = 0; i < length; i++)
-    {
-        printf("%f  ", a[i]);
-    }
-    printf("\n");
-}
-
 int min(int x, int y)
 {
     return x < y ? x : y;
 }
 
-void print_current_time(int begin)
+void print_time_diff(struct timespec *begin, struct timespec *end)
 {
-    time_t rawtime;
-    struct tm *timeinfo;
+    struct timespec result;
+    result.tv_sec = end->tv_sec - begin->tv_sec;
+    result.tv_nsec = end->tv_nsec - begin->tv_nsec;
+    if (end->tv_nsec < begin->tv_nsec)
+    {
+        result.tv_sec--;
+        result.tv_nsec += (long)1e9;
+    }
 
-    time(&rawtime);
-    timeinfo = localtime(&rawtime);
-    if (begin == 1)
-    {
-        printf("Begin sort  %s", asctime(timeinfo));
-    }
-    else
-    {
-        printf("End sort  %s", asctime(timeinfo));
-    }
+    printf("%ld.%09ld\n", result.tv_sec, result.tv_nsec);
 }
 
 void check_error(float *arr, int arr_len)
@@ -114,6 +82,12 @@ int main(int argc, char *argv[])
     MPI_Comm_size(MPI_COMM_WORLD, &world_size);
     MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
+    if (argc != 2)
+    {
+        printf("Invalid parameter num\n");
+        exit(1);
+    }
+
     char procname[MPI_MAX_PROCESSOR_NAME];
     int pro_name_len;
 
@@ -122,14 +96,25 @@ int main(int argc, char *argv[])
     //printf("World size is %d\n", world_size);
     printf("Process %d of %d on %s\n", world_rank, world_size, procname);
 
-    uint64_t total_num;
-    if(strcmp(argv[1], "0") == 0){
+    size_t total_num;
+    char *file_path;
+    if (strcmp(argv[1], "0") == 0)
+    {
         total_num = hhG;
-    }else if (strcmp(argv[1], "1") == 0){
+        file_path = save_path_256M;
+    }
+    else if (strcmp(argv[1], "1") == 0)
+    {
         total_num = oneG;
-    }else if (strcmp(argv[1], "2")==0){
-        total_num = fourG;
-    }else{
+        file_path = save_path_1G;
+    }
+    else if (strcmp(argv[1], "2") == 0)
+    {
+        total_num = fourG - 4967296;
+        file_path = save_path_4G;
+    }
+    else
+    {
         printf("Unvalid para");
         exit(1);
     }
@@ -137,24 +122,35 @@ int main(int argc, char *argv[])
     int local_n = total_num / world_size;
     // int local_n = 10000;
     int P = world_size;
-    int N = local_n * P;
+    size_t N = total_num;
 
-    FILE *fp = fopen(save_path_1G, "rb");
+    FILE *fp = fopen(file_path, "rb");
 
     float *local_arr = malloc(sizeof(float) * local_n);
 
+    if (local_arr == NULL)
+    {
+        printf("local arr null rank %d\n", world_rank);
+        return 1;
+    }
+
     fseek(fp, sizeof(float) * local_n * world_rank, SEEK_SET);
-    fread(local_arr, sizeof(float), local_n, fp);
+    size_t read_num = fread(local_arr, sizeof(float), local_n, fp);
+    if (read_num != local_n)
+    {
+        printf("Read error");
+        return 1;
+    }
 
     MPI_Barrier(MPI_COMM_WORLD);
-    clock_t begin = clock();
-    //print_current_time(1);
+    struct timespec begin;
+    clock_gettime(CLOCK_MONOTONIC, &begin);
 
     qsort(local_arr, local_n, sizeof(float), cmpfunc);
 
     float *local_samples = malloc(sizeof(float) * P);
 
-    int sample_index;
+    size_t sample_index;
     for (int i = 0; i < P; i++)
     {
         sample_index = i * (N / (P * P));
@@ -212,59 +208,104 @@ int main(int argc, char *argv[])
     int recv_length = arr_sum(recvCounts, P);
     float *recv_arr = malloc(sizeof(float) * recv_length);
 
+    if (recv_arr == NULL)
+    {
+        printf("recv arr NULL on rank %d\n", world_rank);
+        return 1;
+    }
+
     int *sdisp = malloc(sizeof(int) * P);
     int *rdisp = malloc(sizeof(int) * P);
 
     sdisp[0] = 0;
-    for (int i = 1; i<world_size; i++)
+    for (int i = 1; i < world_size; i++)
     {
-        sdisp[i] = sdisp[i-1] + sendCounts[i-1];
+        sdisp[i] = sdisp[i - 1] + sendCounts[i - 1];
     }
     rdisp[0] = 0;
-    for (int i = 1; i<world_size; i++)
+    for (int i = 1; i < world_size; i++)
     {
-        rdisp[i] = rdisp[i-1] +  recvCounts[i-1];
+        rdisp[i] = rdisp[i - 1] + recvCounts[i - 1];
     }
 
     MPI_Alltoallv(local_arr, sendCounts, sdisp, MPI_FLOAT, recv_arr, recvCounts, rdisp, MPI_FLOAT, MPI_COMM_WORLD);
 
     merge_recv_arr(recv_arr, P, recv_length, recvCounts);
 
-    //print_current_time(0);
-    clock_t end = clock();
-    float used_time = 1.0 * (end - begin) / CLOCKS_PER_SEC;
-    printf("used time %f on rank %d\n", used_time, world_rank);
 
-    float *total_arr = NULL;
-    int *total_recvCounts = NULL;
-    if (world_rank == 0)
-    {
-        total_arr = malloc(sizeof(float) * N);
-        total_recvCounts = malloc(sizeof(int) * P);
-    }
+    struct timespec end;
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    print_time_diff(&begin, &end);
 
-    MPI_Gather(&recv_length, 1, MPI_INT, total_recvCounts, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Barrier(MPI_COMM_WORLD);
 
-    int *total_rdisp = NULL;
-    if (world_rank == 0)
+    // 4G的时候，total_rdisp最后加到一起会超出int, 4G时不能用Gatherv
+    if (strcmp(argv[1], "2") != 0)
     {
-        total_rdisp = malloc(sizeof(int) * P);
-        total_rdisp[0] = 0;
-        for (int i = 1; i<P; i++)
+        float *total_arr = NULL;
+        int *total_recvCounts = NULL;
+        if (world_rank == 0)
         {
-            total_rdisp[i] = total_rdisp[i-1] +  total_recvCounts[i-1];
+            total_arr = malloc(sizeof(float) * N);
+            if (total_arr == NULL)
+            {
+                printf("total NULL\n");
+                return 1;
+            }
+            total_recvCounts = malloc(sizeof(int) * P);
+            if (total_recvCounts == NULL)
+            {
+                printf("total_recvCount NULL\n");
+                return 1;
+            }
+        }
+
+        MPI_Gather(&recv_length, 1, MPI_INT, total_recvCounts, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        int *total_rdisp = NULL;
+        if (world_rank == 0)
+        {
+            total_rdisp = malloc(sizeof(int) * P);
+            total_rdisp[0] = 0;
+            for (int i = 1; i < P; i++)
+            {
+                total_rdisp[i] = total_rdisp[i - 1] + total_recvCounts[i - 1];
+            }
+        }
+
+        MPI_Gatherv(recv_arr, recv_length, MPI_FLOAT, total_arr, total_recvCounts, total_rdisp, MPI_FLOAT, 0, MPI_COMM_WORLD);
+        MPI_Barrier(MPI_COMM_WORLD);
+
+        if (world_rank == 0)
+        {
+            check_error(total_arr, N);
         }
     }
-
-    MPI_Gatherv(recv_arr, recv_length, MPI_FLOAT, total_arr, total_recvCounts, total_rdisp, MPI_FLOAT, 0, MPI_COMM_WORLD);
-    MPI_Barrier(MPI_COMM_WORLD);
-
-    if(world_rank == 0)
+    else
     {
-        check_error(total_arr, N);
+        check_error(recv_arr, recv_length);
+        float next_head;
+        if (world_rank == 0)
+        {
+            MPI_Recv(&next_head, 1, MPI_FLOAT, world_rank+1, 0, MPI_COMM_WORLD, &status);
+            if (recv_arr[recv_length-1] > next_head){
+                printf("sort error on %d\n", world_rank);
+            }
+        }
+        else if (world_rank < world_size - 1)
+        {
+            MPI_Recv(&next_head, 1, MPI_FLOAT, world_rank+1, 0, MPI_COMM_WORLD, &status);
+            if (recv_arr[recv_length-1] > next_head){
+                printf("sort error on %d\n", world_rank);
+            }
+            MPI_Send(recv_arr, 1, MPI_FLOAT, world_rank-1, 0, MPI_COMM_WORLD);
+        }
+        else
+        {
+            MPI_Send(recv_arr, 1, MPI_FLOAT, world_rank-1, 0, MPI_COMM_WORLD);
+        }
     }
-
 
     MPI_Finalize();
     return 0;
@@ -324,7 +365,7 @@ int get_split_index(float *search_arr, float value, int base, int totoal_length)
 int arr_sum(int *arr, int length)
 {
     int sum = 0;
-    for (int i = 0; i<length; i++)
+    for (int i = 0; i < length; i++)
     {
         sum += arr[i];
     }
@@ -334,8 +375,9 @@ int arr_sum(int *arr, int length)
 int arr_part_sum(int *arr, int length, int begin, int end)
 {
     int sum = 0;
-    if (end > length) end = length;
-    for (int i = begin; i<end; i++)
+    if (end > length)
+        end = length;
+    for (int i = begin; i < end; i++)
     {
         sum += arr[i];
     }
@@ -350,14 +392,14 @@ void merge_recv_arr(float *recv, int comm_size, int recv_length, int *recvCounts
     for (seg = 1; seg < comm_size; seg += seg)
     {
         i = 1;
-        start=0;
+        start = 0;
         while (start < recv_length)
         {
             int low = start;
             // int mid = min(recv_length, start + arr_part_sum(recvCounts, comm_size, (i-1)*2*seg, (i-1)*2*seg + seg));
             // int high = min(recv_length, start + arr_part_sum(recvCounts, comm_size, (i-1)*2*seg, i*2*seg));
-            int mid = min(recv_length, arr_part_sum(recvCounts, comm_size, 0, (i-1)*2*seg + seg));
-            int high = min(recv_length, arr_part_sum(recvCounts, comm_size, 0, i*2*seg));
+            int mid = min(recv_length, arr_part_sum(recvCounts, comm_size, 0, (i - 1) * 2 * seg + seg));
+            int high = min(recv_length, arr_part_sum(recvCounts, comm_size, 0, i * 2 * seg));
             int k = low;
             int start1 = low, end1 = mid;
             int start2 = mid, end2 = high;
@@ -368,12 +410,12 @@ void merge_recv_arr(float *recv, int comm_size, int recv_length, int *recvCounts
             while (start2 < end2)
                 b[k++] = a[start2++];
 
-            start += arr_part_sum(recvCounts, comm_size, (i-1)*2*seg, i*2*seg);
+            start += arr_part_sum(recvCounts, comm_size, (i - 1) * 2 * seg, i * 2 * seg);
             i++;
         }
         float *temp = a;
         a = b;
-        b = temp;   
+        b = temp;
     }
     if (a != recv)
     {

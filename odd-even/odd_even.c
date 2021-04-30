@@ -4,6 +4,7 @@
 #include <mpich/mpi.h>
 #include <math.h>
 #include <time.h>
+#include <sys/time.h>
 
 #define fourG (1ull << 32)
 #define oneG (1ull << 30)
@@ -35,34 +36,17 @@ void rand_gen(float *a, int arr_len, int seed)
     }
 }
 
-void display(float *a, int length, int rank, int status)
-{
-    if (status == 0)
-        printf("Before Rank %d: ", rank);
-    else
-        printf("After Rank %d ", rank);
-    for (int i = 0; i < length; i++)
-    {
-        printf("%f  ", a[i]);
-    }
-    printf("\n");
-}
 
-void print_current_time(int begin)
-{
-    time_t rawtime;
-    struct tm *timeinfo;
-
-    time(&rawtime);
-    timeinfo = localtime(&rawtime);
-    if (begin == 1)
-    {
-        printf("Begin sort  %s", asctime(timeinfo));
+void print_time_diff(struct timespec *begin, struct timespec *end) {
+    struct timespec result;
+    result.tv_sec = end->tv_sec - begin->tv_sec;
+    result.tv_nsec =  end->tv_nsec - begin->tv_nsec;
+    if (end->tv_nsec < begin->tv_nsec) {
+        result.tv_sec--;
+        result.tv_nsec += (long)1e9;
     }
-    else
-    {
-        printf("End sort  %s", asctime(timeinfo));
-    }
+    
+    printf("%ld.%09ld\n", result.tv_sec, result.tv_nsec);
 }
 
 void check_error(float *arr, int arr_len)
@@ -109,7 +93,8 @@ int main(int argc, char *argv[])
         total_num = oneG;
         file_path = save_path_1G;
     }else if (strcmp(argv[1], "2")==0){
-        total_num = fourG-8;
+        /* 4G will overflow, so we just using number little bit smaller than 4G in both algorithm*/
+        total_num = fourG-4967296;
         file_path = save_path_4G;
     }else{
         printf("Unvalid para");
@@ -117,13 +102,7 @@ int main(int argc, char *argv[])
     }
 
     int local_n = total_num / world_size;
-    int total_length = total_num;
-
-    // uint64_t local_num = fourG / world_size;
-    // uint64_t total_length_num = local_num * world_size;
-
-    // int local_n = (int)local_num;
-    // int total_length = (int)total_length_num;
+    size_t total_length = total_num;
 
     FILE *fp = fopen(file_path, "rb");
     float *local_A = malloc(sizeof(float) * local_n);
@@ -131,11 +110,16 @@ int main(int argc, char *argv[])
     float *temp_C = malloc(sizeof(float) * local_n);
 
     fseek(fp, sizeof(float) * local_n * world_rank, SEEK_SET);
-    fread(local_A, sizeof(float), local_n, fp);
+    size_t read_num = fread(local_A, sizeof(float), local_n, fp);
+    if (read_num != local_n){
+        printf("Read error");
+        return 1;
+    }
 
     MPI_Barrier(MPI_COMM_WORLD);
-    clock_t begin = clock();
-    //print_current_time(1);
+    struct timespec begin;
+    clock_gettime(CLOCK_MONOTONIC, &begin);
+
     qsort(local_A, local_n, sizeof(float), cmpfunc);
 
     for (int phase = 0; phase < world_size; phase++)
@@ -161,10 +145,9 @@ int main(int argc, char *argv[])
         }
     }
 
-    //print_current_time(0);
-    clock_t end = clock();
-    float used_time = 1.0 * (end - begin) / CLOCKS_PER_SEC;
-    printf("used time %f on rank %d\n", used_time, world_rank);
+    struct timespec end;
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    print_time_diff(&begin, &end);
 
     MPI_Barrier(MPI_COMM_WORLD);
 
