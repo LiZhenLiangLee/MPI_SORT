@@ -27,13 +27,14 @@ mpicc.mpich -o psrs -O3 psrs.c
 ## Running
 **Single machine**
 ```
-mpirun.mpich -np 8 ./odd_even
-mpirun.mpich -np 8 ./psrs
+mpirun.mpich -np 8 ./odd_even 0
+mpirun.mpich -np 8 ./psrs 0
 ```
 **Multi machines**
 ```
-mpirun.mpich -np 8 -f path/to/config_file ./odd_even
-mpirun.mpich -np 8 -f path/to/config_file ./psrs
+mpirun.mpich -np 8 -f path/to/config_file ./odd_even 0
+mpirun.mpich -np 8 -f path/to/config_file ./psrs 0
 ```
 Arg **-np** means the total number of processes when running the code.<br/>
 Arg **-f** specify your config file path.
+The last number '0' means using 256M data. ( '1' for 1G data, '2' for 4G data )
