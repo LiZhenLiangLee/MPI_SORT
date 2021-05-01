@@ -36,5 +36,5 @@ mpirun.mpich -np 8 -f path/to/config_file ./odd_even 0
 mpirun.mpich -np 8 -f path/to/config_file ./psrs 0
 ```
 Arg **-np** means the total number of processes when running the code.<br/>
-Arg **-f** specify your config file path.
+Arg **-f** specify your config file path.<br/>
 The last number '0' means using 256M data. ( '1' for 1G data, '2' for 4G data )
